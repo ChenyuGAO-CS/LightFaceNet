@@ -41,7 +41,7 @@ Tensorflow implementation for MobileFaceNet.
 |  5.7M  | 99.25+ |    96.8+    |          260-         |
 
 ## SqueezeFaceNet_TF performance
- |--------------|--------------------------------------------------|
+ |              |                                                  |
  |   Datasets   |     Model: squeezenet(i7-5930K @ 3.50~3.70GHz)   |
  |--------------|-------------|------------------------------------|
  | Size:112x112 |   Accuracy  |                 FPS                |
@@ -53,7 +53,7 @@ Tensorflow implementation for MobileFaceNet.
  |    Cfp_FP    |   78.5      |                83.3                |
  |--------------|-------------|                                    |
  |   Agedb_30   |   83.7      |                                    |
- |--------------|-------------|------------------------------------|
+ |              |             |                                    |
 
 ## References
 
