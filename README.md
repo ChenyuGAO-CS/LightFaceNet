@@ -33,6 +33,8 @@ Tensorflow implementation for MobileFaceNet.
 1. run script
 '''${MobileFaceNet_TF_ROOT}/inference.py'''
 2. the best model of SqueezeFaceNet_TF at ${MobileFaceNet_TF_ROOT}/output/ckpt_best/squeezefacenet_best_ckpt.
+3. [download the model](https://pan.baidu.com/s/1lYOX0DNt7c7jB5KSi99uVA)
+key of the download link：lpze
 
 ## MobileFaceNet_TF performance
 
