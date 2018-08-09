@@ -1,6 +1,6 @@
 ### LightFaceNet_TF
 
-Tensorflow implementation for MobileFaceNet, SqueezeFaceNet and ShuffleFaceNet.
+Tensorflow implementation for MobileFaceNet, SqueezeFaceNet, ShuffleFaceNet ans ShuffleFaceNet v2.
 
 ## dependencies
 
