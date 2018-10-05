@@ -6,6 +6,10 @@ import argparse
 import pickle
 import cv2
 import os
+import sys
+sys.path.append('../')
+
+from utils.tools import *
 
 
 def parse_args():
@@ -13,9 +17,9 @@ def parse_args():
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
         description='data path information'
     )
-    parser.add_argument('--bin_path', default='../datasets/faces_ms1m_112x112/train.rec', type=str,
+    parser.add_argument('--bin_path', default='../datasets/glint_112x112/glint.rec', type=str,
                         help='path to the binary image file')
-    parser.add_argument('--idx_path', default='../datasets/faces_ms1m_112x112/train.idx', type=str,
+    parser.add_argument('--idx_path', default='../datasets/glint_112x112/glint.idx', type=str,
                         help='path to the image index path')
     parser.add_argument('--tfrecords_file_path', default='../datasets/tfrecords', type=str,
                         help='path to the output of tfrecords file path')
@@ -24,21 +28,22 @@ def parse_args():
 
 
 def mx2tfrecords(imgidx, imgrec, args):
-    output_path = os.path.join(args.tfrecords_file_path, 'tran.tfrecords')
+    output_path = os.path.join(args.tfrecords_file_path, 'train.tfrecords')
     if not os.path.exists(args.tfrecords_file_path):
         os.makedirs(args.tfrecords_file_path)
     writer = tf.python_io.TFRecordWriter(output_path)
-    for i in imgidx:
+    for count, i in enumerate(imgidx):
         img_info = imgrec.read_idx(i)
         header, img = mx.recordio.unpack(img_info)
-        label = int(header.label)
+        label = int(header.label[0])
         example = tf.train.Example(features=tf.train.Features(feature={
             'image_raw': tf.train.Feature(bytes_list=tf.train.BytesList(value=[img])),
             "label": tf.train.Feature(int64_list=tf.train.Int64List(value=[label]))
         }))
         writer.write(example.SerializeToString())  # Serialize To String
-        if i % 10000 == 0:
-            print('%d num image processed' % i)
+        # if i % 10000 == 0:
+        #     print('%d num image processed' % i)
+        view_bar('Image processing: ', count + 1, len(imgidx))
     writer.close()
 
 
@@ -108,7 +113,10 @@ def create_tfrecords():
 
 
 def load_bin(db_name, image_size, args):
-    bins, issame_list = pickle.load(open(os.path.join(args.eval_db_path, db_name+'.bin'), 'rb'), encoding='bytes')
+    # python3
+    # bins, issame_list = pickle.load(open(os.path.join(args.eval_db_path, db_name+'.bin'), 'rb'), encoding='bytes')
+    # python2
+    bins, issame_list = pickle.load(open(os.path.join(args.eval_db_path, db_name+'.bin'), 'rb'))
     data_list = []
     for _ in [0,1]:
         data = np.empty((len(issame_list)*2, image_size[0], image_size[1], 3))
@@ -130,7 +138,10 @@ def load_bin(db_name, image_size, args):
 
 
 def load_data(db_name, image_size, args):
-    bins, issame_list = pickle.load(open(os.path.join(args.eval_db_path, db_name+'.bin'), 'rb'), encoding='bytes')
+    # python3
+    # bins, issame_list = pickle.load(open(os.path.join(args.eval_db_path, db_name+'.bin'), 'rb'), encoding='bytes')
+    # python2
+    bins, issame_list = pickle.load(open(os.path.join(args.eval_db_path, db_name+'.bin'), 'rb'))
     datasets = np.empty((len(issame_list)*2, image_size[0], image_size[1], 3))
 
     for i in range(len(issame_list)*2):
@@ -154,7 +165,7 @@ def test_tfrecords():
     config = tf.ConfigProto(allow_soft_placement=True)
     sess = tf.Session(config=config)
     # training datasets api config
-    tfrecords_f = os.path.join(args.tfrecords_file_path, 'tran.tfrecords')
+    tfrecords_f = os.path.join(args.tfrecords_file_path, 'train.tfrecords')
     dataset = tf.data.TFRecordDataset(tfrecords_f)
     dataset = dataset.map(parse_function)
     dataset = dataset.shuffle(buffer_size=20000)
@@ -222,20 +233,20 @@ def next_batch(batch_size, pattern):
 
 if __name__ == '__main__':
     '''data process'''
+    os.environ["CUDA_VISIBLE_DEVICES"] = '1'
     create_tfrecords()
     # test_tfrecords()
 
     # args = parse_args()
     #
-    # os.environ["CUDA_VISIBLE_DEVICES"] = '1'
-    # pattern = os.path.join(args.tfrecords_file_path, 'tran.tfrecords')
+    # pattern = os.path.join(args.tfrecords_file_path, 'train.tfrecords')
     # img_batch, label_batch = next_batch(batch_size=32, pattern=pattern)
     #
     # init_op = tf.group(
     #     tf.global_variables_initializer(),
     #     tf.local_variables_initializer()
     # )
-
+    #
     # config = tf.ConfigProto()
     # config.gpu_options.allow_growth = True
     #
@@ -249,14 +260,15 @@ if __name__ == '__main__':
     #         = sess.run([img_batch, label_batch])
     #
     #     cv2.imshow('test', img_batch_[1, ...])
+    #     cv2.imwrite('./test.jpg', img_batch_[1, ...])
     #     cv2.waitKey(0)
     #
     #     print(img_batch_)
     #
     #     print('debug')
-
-        # coord.request_stop()
-        # coord.join(threads)
+    #
+    #     coord.request_stop()
+    #     coord.join(threads)
 
 
 

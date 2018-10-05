@@ -6,11 +6,13 @@ Tensorflow implementation for MobileFaceNet.
 Author: aiboy.wei@outlook.com .
 '''
 
-from utils.data_process import parse_function, load_data, next_batch
-from tensorflow.core.protobuf import config_pb2
-# from nets.MobileFaceNet import inference
-from nets.SqueezeFaceNet import inference
-from losses.face_losses import cos_loss, combine_loss
+from utils.data_process import load_data, next_batch
+import nets.TinyMobileFaceNet as TinyMobileFaceNet
+import nets.MobileFaceNet as MobileFaceNet
+import nets.ShuffleFaceNet as ShuffleFaceNet
+import nets.ShuffleFaceNet_v2 as ShuffleFaceNet_v2
+import nets.SqueezeFaceNet as SqueezeFaceNet
+from losses.face_losses import cos_loss, triplet_loss
 from verification import evaluate
 from scipy.optimize import brentq
 from utils.common import train
@@ -22,26 +24,25 @@ import numpy as np
 import argparse
 import time
 import os
-import pdb
 
 slim = tf.contrib.slim
 
 
 def get_parser():
     parser = argparse.ArgumentParser(description='parameters to train net')
-    parser.add_argument('--max_epoch', default=100, help='epoch to train the network')
+    parser.add_argument('--max_epoch', default=20, help='epoch to train the network')
     parser.add_argument('--image_size', default=[112, 112], help='the image size')
-    parser.add_argument('--num_output', default=85164, help='the train images number')
+    parser.add_argument('--num_output', default=93979, help='the train images number')
     parser.add_argument('--embedding_size', type=int,
                         help='Dimensionality of the embedding.', default=128)
     parser.add_argument('--weight_decay', default=5e-5, help='L2 weight regularization.')
     parser.add_argument('--lr_schedule', help='Number of epochs for learning rate piecewise.', default=[1, 4, 6, 8])
-    parser.add_argument('--train_batch_size', default=128, help='batch size to train network')
+    parser.add_argument('--train_batch_size', default=90, help='batch size to train network')
     parser.add_argument('--test_batch_size', type=int,
                         help='Number of images to process in a batch in the test set.', default=100)
     parser.add_argument('--eval_datasets', default=['lfw', 'cfp_ff', 'cfp_fp', 'agedb_30'], help='evluation datasets')
     # parser.add_argument('--eval_datasets', default=['lfw'], help='evluation datasets')
-    parser.add_argument('--eval_db_path', default='./datasets/faces_ms1m_112x112', help='evluate datasets base path')
+    parser.add_argument('--eval_db_path', default='./datasets/glint_112x112', help='evluate datasets base path')
     parser.add_argument('--eval_nrof_folds', type=int,
                         help='Number of folds to use for cross validation. Mainly used for testing.', default=10)
     parser.add_argument('--tfrecords_file_path', default='./datasets/tfrecords', type=str,
@@ -56,11 +57,13 @@ def get_parser():
     parser.add_argument('--ckpt_interval', default=2000, help='intervals to save ckpt file')
     parser.add_argument('--validate_interval', default=2000, help='intervals to save ckpt file')
     parser.add_argument('--show_info_interval', default=20, help='intervals to save ckpt file')
-    parser.add_argument('--pretrained_model', type=str, default='',
+    parser.add_argument('--pretrained_model', type=str, default='./output/ckpt_best/mobilefacenet_best_ckpt',
                         help='Load a pretrained model before training starts.')
+    parser.add_argument('--model_type', default=0, help='MobileFaceNet or TinyMobileFaceNet or SqueezeFaceNet or ShuffleFaceNet or ShuffleFaceNet_v2')
     parser.add_argument('--optimizer', type=str, choices=['ADAGRAD', 'ADADELTA', 'ADAM', 'RMSPROP', 'MOM'],
                         help='The optimization algorithm to use', default='ADAM')
     parser.add_argument('--log_device_mapping', default=False, help='show device placement log')
+    parser.add_argument('--fine_tune', default=True, help='fine tune')
     parser.add_argument('--moving_average_decay', type=float,
                         help='Exponential decay for tracking of training parameters.', default=0.999)
     parser.add_argument('--log_histograms',
@@ -69,6 +72,7 @@ def get_parser():
                         help='Loss based on the norm of the activations in the prelogits layer.', default=5e-5)
     parser.add_argument('--prelogits_norm_p', type=float,
                         help='Norm to use for prelogits norm loss.', default=1.0)
+    parser.add_argument('--gpu', default='2', help='GPU index')
 
     args = parser.parse_args()
     return args
@@ -76,8 +80,8 @@ def get_parser():
 
 if __name__ == '__main__':
     with tf.Graph().as_default():
-        os.environ["CUDA_VISIBLE_DEVICES"] = "3"
         args = get_parser()
+        os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu
 
         # create log dir
         subdir = datetime.strftime(datetime.now(), '%Y%m%d-%H%M%S')
@@ -89,20 +93,20 @@ if __name__ == '__main__':
         global_step = tf.Variable(name='global_step', initial_value=0, trainable=False)
         epoch = tf.Variable(name='epoch', initial_value=-1, trainable=False)
         # define placeholder
-        inputs = tf.placeholder(name='img_inputs', shape=[None, *args.image_size, 3], dtype=tf.float32)
+        # inputs = tf.placeholder(name='img_inputs', shape=[None, *args.image_size, 3], dtype=tf.float32)
+        inputs = tf.placeholder(name='img_inputs',
+                                shape=[None, args.image_size[0], args.image_size[1], 3],
+                                dtype=tf.float32)
         labels = tf.placeholder(name='img_labels', shape=[None, ], dtype=tf.int64)
         phase_train_placeholder = tf.placeholder_with_default(tf.constant(False, dtype=tf.bool), shape=None, name='phase_train')
 
-        # prepare train dataset
-
         img_batch, label_batch = next_batch(batch_size=args.train_batch_size,
-                                            pattern=os.path.join(args.tfrecords_file_path, 'tran.tfrecords'))
+                                            pattern=os.path.join(args.tfrecords_file_path, 'train.tfrecords'))
 
         # prepare validate datasets
         ver_list = []
         ver_name_list = []
         for db in args.eval_datasets:
-        # for db in ['lfw']:
             print('begin db %s convert.' % db)
             data_set = load_data(db, args.image_size, args)
             ver_list.append(data_set)
@@ -118,22 +122,32 @@ if __name__ == '__main__':
         inputs = tf.identity(inputs, 'input')
 
         w_init_method = slim.initializers.xavier_initializer()
-        # train with MobileFaceNet
-        prelogits, net_points = inference(inputs, phase_train=phase_train_placeholder, weight_decay=args.weight_decay)
-        # train with ShuffleNet
-        # prelogits, net_points = inf_squeezeNet(inputs)
-        # pdb.set_trace()
-        # prelogits = Squeezenet.build(inputs, True)
-        # net_points = None
-
-
+        if args.model_type == 0:
+            prelogits, net_points = MobileFaceNet.inference(images=inputs,
+                                                            phase_train=phase_train_placeholder,
+                                                            weight_decay=args.weight_decay)
+        elif args.model_type == 1:
+            prelogits, net_points = TinyMobileFaceNet.inference(images=inputs,
+                                                                phase_train=phase_train_placeholder,
+                                                                weight_decay=args.weight_decay)
+        elif args.model_type == 2:
+            prelogits, net_points = SqueezeFaceNet.inference(images=inputs,
+                                                             phase_train=phase_train_placeholder,
+                                                             weight_decay=args.weight_decay)
+        elif args.model_type == 3:
+            prelogits, net_points = ShuffleFaceNet.inference(images=inputs,
+                                                             phase_train=phase_train_placeholder,
+                                                             weight_decay=args.weight_decay)
+        else:
+            prelogits, net_points = ShuffleFaceNet_v2.inference(images=inputs,
+                                                                phase_train=phase_train_placeholder,
+                                                                weight_decay=args.weight_decay)
         # record the network architecture
-        if net_points != None:
-            hd = open("./arch/txt/MobileFaceNet_Arch.txt", 'w')
-            for key in net_points.keys():
-                info = '{}:{}\n'.format(key, net_points[key].get_shape().as_list())
-                hd.write(info)
-            hd.close()
+        hd = open("./arch/txt/MobileFaceNet_Arch.txt", 'w')
+        for key in net_points.keys():
+            info = '{}:{}\n'.format(key, net_points[key].get_shape().as_list())
+            hd.write(info)
+        hd.close()
 
         embeddings = tf.nn.l2_normalize(prelogits, 1, 1e-10, name='embeddings')
 
@@ -143,7 +157,7 @@ if __name__ == '__main__':
         tf.add_to_collection(tf.GraphKeys.REGULARIZATION_LOSSES, prelogits_norm * args.prelogits_norm_loss_factor)
 
         inference_loss, logit = cos_loss(prelogits, labels, args.num_output)
-        # inference_loss, logit = combine_loss(prelogits, labels, args.num_output)
+        # inference_loss, logit = triplet_loss(prelogits, labels, args.num_output, margin=0.5)
 
         tf.add_to_collection('losses', inference_loss)
 
@@ -190,20 +204,25 @@ if __name__ == '__main__':
             hd.write('\n')
         hd.close()
 
-        # saver to load pretrained model or save model
-        # MobileFaceNet_vars = [v for v in tf.trainable_variables() if v.name.startswith('MobileFaceNet')]
-        saver = tf.train.Saver(tf.trainable_variables(), max_to_keep=args.saver_maxkeep)
+        # fine tune
+        if args.fine_tune:
+            MobileFaceNet_vars = [v for v in tf.trainable_variables() if v.name.startswith('MobileFaceNet')]
 
-        # init all variables
-        sess.run(tf.global_variables_initializer())
-        sess.run(tf.local_variables_initializer())
+            saver = tf.train.Saver(MobileFaceNet_vars, max_to_keep=args.saver_maxkeep)
+        else:
+            saver = tf.train.Saver(tf.trainable_variables(), max_to_keep=args.saver_maxkeep)
 
         # load pretrained model
         if pretrained_model:
             print('Restoring pretrained model: %s' % pretrained_model)
             ckpt = tf.train.get_checkpoint_state(pretrained_model)
             print(ckpt)
+
             saver.restore(sess, ckpt.model_checkpoint_path)
+
+        # init all variables
+        sess.run(tf.global_variables_initializer())
+        sess.run(tf.local_variables_initializer())
 
         # output file path
         if not os.path.exists(args.log_file_path):
@@ -211,13 +230,13 @@ if __name__ == '__main__':
         if not os.path.exists(args.ckpt_best_path):
             os.makedirs(args.ckpt_best_path)
 
-
         total_accuracy = {}
         _ = sess.run(inc_epoch_op)
         coord = tf.train.Coordinator()
         threads = tf.train.start_queue_runners(sess, coord)
         for i in range(args.max_epoch):
             # sess.run(iterator.initializer)
+            # _ = sess.run(inc_epoch_op)
             count = 0
             while True:
                 try:
@@ -225,11 +244,8 @@ if __name__ == '__main__':
 
                     feed_dict = {inputs: images_train, labels: labels_train, phase_train_placeholder: True}
                     start = time.time()
-                    # _, total_loss_val, inference_loss_val, reg_loss_val, _, acc_val = \
-                    # sess.run([train_op, total_loss, inference_loss, regularization_losses, inc_global_step_op, Accuracy_Op],
-                    #          feed_dict=feed_dict, options=config_pb2.RunOptions(report_tensor_allocations_upon_oom=True))
 
-                    _, total_loss_val, inference_loss_val, reg_loss_val, _, acc_val = \
+                    _, total_loss_val, inference_loss_val, reg_loss_val, global_step_val, acc_val = \
                         sess.run([train_op, total_loss, inference_loss, regularization_losses, inc_global_step_op,
                                   Accuracy_Op],
                                  feed_dict=feed_dict)
@@ -247,11 +263,11 @@ if __name__ == '__main__':
                     if count > 0 and count % args.summary_interval == 0:
                         feed_dict = {inputs: images_train, labels: labels_train, phase_train_placeholder: True}
                         summary_op_val = sess.run(summary_op, feed_dict=feed_dict)
-                        summary.add_summary(summary_op_val, count)
+                        summary.add_summary(summary_op_val, global_step_val)
 
                     # save ckpt files
                     if count > 0 and count % args.ckpt_interval == 0:
-                        filename = 'MobileFaceNet_iter_{:d}'.format(count) + '.ckpt'
+                        filename = 'MobileFaceNet_epoch_{:d}_iter_{:d}'.format(i, count) + '.ckpt'
                         filename = os.path.join(args.ckpt_path, filename)
                         saver.save(sess, filename)
 
@@ -288,10 +304,11 @@ if __name__ == '__main__':
 
                             if ver_name_list == 'lfw' and np.mean(accuracy) > 0.992:
                                 print('best accuracy is %.5f' % np.mean(accuracy))
-                                filename = 'MobileFaceNet_iter_best_{:d}'.format(count) + '.ckpt'
+                                filename = 'MobileFaceNet_best.ckpt'
                                 filename = os.path.join(args.ckpt_best_path, filename)
                                 saver.save(sess, filename)
-                    if count > 0 and args.train_batch_size * count > 3804846:
+                    if count > 0 and args.train_batch_size * count > 2830146:
+                        epoch_val = sess.run([inc_epoch_op])
                         break
 
                 except tf.errors.OutOfRangeError:

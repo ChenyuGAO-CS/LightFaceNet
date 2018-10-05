@@ -1,5 +1,6 @@
 import tensorflow as tf
 import math
+from losses import triplet_losses
 
 
 def arcface_loss(embedding, labels, out_num, w_init=None, s=64., m=0.5):
@@ -76,6 +77,50 @@ def cosineface_losses(embedding, labels, out_num, w_init=None, s=30., m=0.4):
         output = tf.add(s * tf.multiply(cos_t, inv_mask), s * tf.multiply(cos_t_m, mask), name='cosineface_loss_output')
     return output
 
+
+def combine_loss_val(embedding, labels, w_init, out_num, margin_a, margin_m, margin_b, s):
+    '''
+    This code is contributed by RogerLo. Thanks for you contribution.
+
+    :param embedding: the input embedding vectors
+    :param labels:  the input labels, the shape should be eg: (batch_size, 1)
+    :param s: scalar value default is 64
+    :param out_num: output class num
+    :param m: the margin value, default is 0.5
+    :return: the final cacualted output, this output is send into the tf.nn.softmax directly
+    '''
+    weights = tf.get_variable(name='embedding_weights', shape=(embedding.get_shape().as_list()[-1], out_num),
+                              initializer=w_init, dtype=tf.float32)
+    weights_unit = tf.nn.l2_normalize(weights, axis=0)
+    embedding_unit = tf.nn.l2_normalize(embedding, axis=1)
+    cos_t = tf.matmul(embedding_unit, weights_unit)
+    ordinal = tf.constant(list(range(0, embedding.get_shape().as_list()[0])), tf.int64)
+    ordinal_y = tf.stack([ordinal, labels], axis=1)
+    zy = cos_t * s
+    sel_cos_t = tf.gather_nd(zy, ordinal_y)
+    if margin_a != 1.0 or margin_m != 0.0 or margin_b != 0.0:
+        if margin_a == 1.0 and margin_m == 0.0:
+            s_m = s * margin_b
+            new_zy = sel_cos_t - s_m
+        else:
+            cos_value = sel_cos_t / s
+            t = tf.acos(cos_value)
+            if margin_a != 1.0:
+                t = t * margin_a
+            if margin_m > 0.0:
+                t = t + margin_m
+            body = tf.cos(t)
+            if margin_b > 0.0:
+                body = body - margin_b
+            new_zy = body * s
+    updated_logits = tf.add(zy, tf.scatter_nd(ordinal_y, tf.subtract(new_zy, sel_cos_t), zy.get_shape()))
+    loss = tf.reduce_mean(tf.nn.sparse_softmax_cross_entropy_with_logits(labels=labels, logits=updated_logits))
+    predict_cls = tf.argmax(updated_logits, 1)
+    accuracy = tf.reduce_mean(tf.cast(tf.equal(tf.cast(predict_cls, tf.int64), tf.cast(labels, tf.int64)), 'float'))
+    predict_cls_s = tf.argmax(zy, 1)
+    accuracy_s = tf.reduce_mean(tf.cast(tf.equal(tf.cast(predict_cls_s, tf.int64), tf.cast(labels, tf.int64)), 'float'))
+    return zy, loss, accuracy, accuracy_s, predict_cls_s
+
 def center_loss(features, label, alfa, nrof_classes):
     """Center loss based on the paper "A Discriminative Feature Learning Approach for Deep Face Recognition"
        (http://ydwen.github.io/papers/WenECCV16.pdf)
@@ -130,98 +175,31 @@ def cos_loss(x, y, num_cls, reuse=False, alpha=0.35, scale=64, name='cos_loss'):
 
     return cos_loss, value
 
-def combine_loss(embedding, labels, num_cls, reuse=False, m1=1, m2 = 0.5, m3 = 0, scale=64, name='combine_loss'):
+
+def triplet_loss(x, y, num_cls, margin, reuse=False, mode=0, name='triplet_loss'):
     '''
-    embedding: B x D - features
-    labels: B x 1 - labels
+    x: B x D - features
+    y: B x 1 - labels
     num_cls: 1 - total class number
-    m1, m2,  m3: 1 - margin
+    alpah: 1 - margin
     scale: 1 - scaling paramter
     '''
     # define the classifier weights
-    es = embedding.get_shape()
+    xs = x.get_shape()
     with tf.variable_scope('centers_var', reuse=reuse) as center_scope:
-        weights = tf.get_variable("centers", [es[1], num_cls], dtype=tf.float32,
+        w = tf.get_variable("centers", [xs[1], num_cls], dtype=tf.float32,
                             initializer=tf.contrib.layers.xavier_initializer(), trainable=True)
 
+    x_feat_norm = tf.nn.l2_normalize(x, 1, 1e-10)
+    # (D,C)
+    w_feat_norm = tf.nn.l2_normalize(w, 0, 1e-10)
 
-    weights_unit = tf.nn.l2_normalize(weights, 0, 1e-10)
-    embedding_unit = tf.nn.l2_normalize(embedding, 1, 1e-10)
+    # get the scores after normalization
+    # (N,C)
+    xw_norm = tf.matmul(x_feat_norm, w_feat_norm)
 
-    cos_t = tf.matmul(embedding_unit, weights_unit)
-
-    # ordinal = tf.constant(list(range(0, embedding.get_shape().as_list()[0])), tf.int64)
-    # ordinal_y = tf.stack([ordinal, labels], axis=1)
-    # s_cos_t = cos_t * scale
-    # sel_cos_t = tf.gather_nd(zy, ordinal_y)
-
-    if m1 != 1.0 or m2 != 0.0 or m3 != 0.0:
-        if m1 == 1.0 and m2 == 0.0:
-            s_m = m3
-            new_zy = cos_t - s_m
-        else:
-            t = tf.acos(cos_t)
-            if m1 != 1.0:
-                t = t * m1
-            if m2 > 0.0:
-                t = t + m2
-            body = tf.cos(t)
-            if m3 > 0.0:
-                body = body - m3
-            new_zy = body
+    if mode == 0:
+        triplet_loss, _ = triplet_losses.batch_all_triplet_loss(y, xw_norm, margin)
     else:
-        new_zy = cos_t
-
-    margin_xw_norm = new_zy
-    label_onehot = tf.one_hot(labels, num_cls)
-    value = scale * tf.where(tf.equal(label_onehot, 1), margin_xw_norm, cos_t)
-    loss = tf.reduce_mean(tf.nn.sparse_softmax_cross_entropy_with_logits(labels=labels, logits=value))
-    # predict_cls = tf.argmax(updated_logits, 1)
-    # accuracy = tf.reduce_mean(tf.cast(tf.equal(tf.cast(predict_cls, tf.int64), tf.cast(labels, tf.int64)), 'float'))
-    # predict_cls_s = tf.argmax(zy, 1)
-    # accuracy_s = tf.reduce_mean(tf.cast(tf.equal(tf.cast(predict_cls_s, tf.int64), tf.cast(labels, tf.int64)), 'float'))
-    return loss, value
-
-
-def combine_loss_val(embedding, labels, w_init, out_num, margin_a, margin_m, margin_b, s):
-    '''
-    This code is contributed by RogerLo. Thanks for you contribution.
-
-    :param embedding: the input embedding vectors
-    :param labels:  the input labels, the shape should be eg: (batch_size, 1)
-    :param s: scalar value default is 64
-    :param out_num: output class num
-    :param m: the margin value, default is 0.5
-    :return: the final cacualted output, this output is send into the tf.nn.softmax directly
-    '''
-    weights = tf.get_variable(name='embedding_weights', shape=(embedding.get_shape().as_list()[-1], out_num),
-                              initializer=w_init, dtype=tf.float32)
-    weights_unit = tf.nn.l2_normalize(weights, axis=0)
-    embedding_unit = tf.nn.l2_normalize(embedding, axis=1)
-    cos_t = tf.matmul(embedding_unit, weights_unit)
-    ordinal = tf.constant(list(range(0, embedding.get_shape().as_list()[0])), tf.int64)
-    ordinal_y = tf.stack([ordinal, labels], axis=1)
-    zy = cos_t * s
-    sel_cos_t = tf.gather_nd(zy, ordinal_y)
-    if margin_a != 1.0 or margin_m != 0.0 or margin_b != 0.0:
-        if margin_a == 1.0 and margin_m == 0.0:
-            s_m = s * margin_b
-            new_zy = sel_cos_t - s_m
-        else:
-            cos_value = sel_cos_t / s
-            t = tf.acos(cos_value)
-            if margin_a != 1.0:
-                t = t * margin_a
-            if margin_m > 0.0:
-                t = t + margin_m
-            body = tf.cos(t)
-            if margin_b > 0.0:
-                body = body - margin_b
-            new_zy = body * s
-    updated_logits = tf.add(zy, tf.scatter_nd(ordinal_y, tf.subtract(new_zy, sel_cos_t), zy.get_shape()))
-    loss = tf.reduce_mean(tf.nn.sparse_softmax_cross_entropy_with_logits(labels=labels, logits=updated_logits))
-    predict_cls = tf.argmax(updated_logits, 1)
-    accuracy = tf.reduce_mean(tf.cast(tf.equal(tf.cast(predict_cls, tf.int64), tf.cast(labels, tf.int64)), 'float'))
-    predict_cls_s = tf.argmax(zy, 1)
-    accuracy_s = tf.reduce_mean(tf.cast(tf.equal(tf.cast(predict_cls_s, tf.int64), tf.cast(labels, tf.int64)), 'float'))
-    return zy, loss, accuracy, accuracy_s, predict_cls_s
+        triplet_loss = triplet_losses.batch_hard_triplet_loss(y, xw_norm, margin)
+    return triplet_loss, xw_norm

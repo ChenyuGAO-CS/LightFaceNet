@@ -36,7 +36,6 @@ from collections import namedtuple
 import functools
 
 import tensorflow as tf
-import pdb
 
 slim = tf.contrib.slim
 
@@ -315,6 +314,7 @@ def mobilenet_v2_arg_scope(is_training=True,
                             weights_regularizer=depthwise_regularizer) as sc:
           return sc
 
+
 def inference(images, bottleneck_layer_size=128, phase_train=False,
               weight_decay=0.00005, reuse=False):
     '''build a mobilenet_v2 graph to training or inference.
@@ -339,7 +339,6 @@ def inference(images, bottleneck_layer_size=128, phase_train=False,
     Raises:
         ValueError: Input rank is invalid.
     '''
-    # pdb.set_trace()
     arg_scope = mobilenet_v2_arg_scope(is_training=phase_train, weight_decay=weight_decay)
     with slim.arg_scope(arg_scope):
         return mobilenet_v2(images, bottleneck_layer_size=bottleneck_layer_size, is_training=phase_train, reuse=reuse)
