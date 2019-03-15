@@ -1,0 +1,8 @@
+model_checkpoint_path: "ShuffleFaceNetv2_iter_16000.ckpt"
+all_model_checkpoint_paths: "ShuffleFaceNetv2_iter_6000.ckpt"
+all_model_checkpoint_paths: "ShuffleFaceNetv2_iter_8000.ckpt"
+all_model_checkpoint_paths: "ShuffleFaceNetv2_iter_10000.ckpt"
+all_model_checkpoint_paths: "ShuffleFaceNetv2_iter_12000.ckpt"
+all_model_checkpoint_paths: "ShuffleFaceNetv2_iter_14000.ckpt"
+all_model_checkpoint_paths: "ShuffleFaceNetv2_iter_16000.ckpt"
+
